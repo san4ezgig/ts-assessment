@@ -175,7 +175,7 @@ export const validateOutput = (output: Output) => {
       id: Yup.string().required(),
       name: Yup.string().required(),
     }).required(),
-    value: Yup.string().required(),
+    value: Yup.string().required().nullable(),
     index: Yup.number().required(),
     children: Yup.array()
       .of(Yup.lazy(() => annotationScheme))
@@ -187,7 +187,7 @@ export const validateOutput = (output: Output) => {
       Yup.object({
         id: Yup.string().required(),
         entities: Yup.array(entityScheme),
-        annotations: Yup.array(Yup.object({})),
+        annotations: Yup.array(annotationScheme),
       }),
     ),
   }).validateSync(output);
