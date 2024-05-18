@@ -1,6 +1,6 @@
 import { Annotation, Entity, EntityClass, EntityType, Input } from './types/input';
 import { ConvertedAnnotation, ConvertedEntity, Output } from './types/output';
-import { findIndex, isEmpty } from 'lodash';
+import { isEmpty } from 'lodash';
 import * as Yup from 'yup';
 
 // TODO: Convert Input to the Output structure. Do this in an efficient and generic way.
@@ -9,41 +9,43 @@ export const convertInput = (input: Input): Output => {
   const documents = input.documents.map((document) => {
     // TODO: map the entities to the new structure and sort them based on the property "name"
     // Make sure the nested children are also mapped and sorted
-    const entitiesParentChildIndexesHashMap = getEntitiesParentChildIndexesHashMap(document.entities);
+    const entitiesParentChildHashMap = getEntitiesParentChildHashMap(document.entities);
     const convertedEntitiesHashMap = {};
-    const entities = document.entities
-      .map((entity, _, entities) =>
-        convertEntity(entity, entities, entitiesParentChildIndexesHashMap, convertedEntitiesHashMap),
-      )
-      .sort(sortEntities);
+    const entities = convertEntities(document.entities, entitiesParentChildHashMap, convertedEntitiesHashMap);
 
     // TODO: map the annotations to the new structure and sort them based on the property "index"
     // Make sure the nested children are also mapped and sorted
-    const annotationsParentChildIndexesHashMap = getAnnotationsParentChildIndexesHashMap(document.annotations);
+    const annotationsParentChildHashMap = getAnnotationsParentChildHashMap(document.annotations);
     const annotations = document.annotations
-      .map((annotation, _, annotations) =>
-        convertAnnotation(annotation, annotations, convertedEntitiesHashMap, annotationsParentChildIndexesHashMap, {}),
-      )
-      .filter(({ isParent }) => isParent)
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      .map(({ isParent, ...rest }) => rest)
+      .filter(filterChildAnnotations)
+      .map((annotation) => convertAnnotation(annotation, convertedEntitiesHashMap, annotationsParentChildHashMap))
       .sort(sortAnnotations);
+
     return { id: document.id, entities, annotations };
   });
 
   return { documents };
 };
 
-const getEntitiesParentChildIndexesHashMap = (entities: Entity[]): Record<string, Array<number>> => {
+const convertEntities = (
+  entities: Entity[],
+  parentChildHashMap: Record<string, Array<Entity>>,
+  convertedEntitiesHashMap: Record<string, ConvertedEntity>,
+) => {
+  return entities
+    .map((entity) => convertEntity(entity, parentChildHashMap, convertedEntitiesHashMap))
+    .sort(sortEntities);
+};
+
+const getEntitiesParentChildHashMap = (entities: Entity[]): Record<string, Array<Entity>> => {
   return entities.reduce(
     (acc, entity) => {
       if (!isEmpty(entity.refs)) {
-        const indexOfChild = findIndex(entities, { id: entity.id });
         entity.refs.forEach((entityId) => {
           if (acc[entityId]) {
-            acc[entityId].push(indexOfChild);
+            acc[entityId].push(entity);
           } else {
-            acc[entityId] = [indexOfChild];
+            acc[entityId] = [entity];
           }
         });
 
@@ -52,15 +54,14 @@ const getEntitiesParentChildIndexesHashMap = (entities: Entity[]): Record<string
 
       return acc;
     },
-    {} as Record<string, Array<number>>,
+    {} as Record<string, Array<Entity>>,
   );
 };
 
 // HINT: you probably need to pass extra argument(s) to this function to make it performant.
 const convertEntity = (
   entity: Entity,
-  entities: Entity[],
-  parentChildIndexesHashMap: Record<string, Array<number>>,
+  parentChildHashMap: Record<string, Array<Entity>>,
   convertedEntitiesHashMap: Record<string, ConvertedEntity>,
 ): ConvertedEntity => {
   const { id, name, type, class: entityClass } = entity;
@@ -71,12 +72,8 @@ const convertEntity = (
 
   let children: ConvertedEntity[] = [];
 
-  if (parentChildIndexesHashMap[id]) {
-    children = parentChildIndexesHashMap[id]
-      .map((indexOfEntity) =>
-        convertEntity(entities[indexOfEntity], entities, parentChildIndexesHashMap, convertedEntitiesHashMap),
-      )
-      .sort(sortEntities);
+  if (parentChildHashMap[id]) {
+    children = convertEntities(parentChildHashMap[id], parentChildHashMap, convertedEntitiesHashMap);
   }
 
   const convertedEntity = {
@@ -91,16 +88,15 @@ const convertEntity = (
   return convertedEntity;
 };
 
-const getAnnotationsParentChildIndexesHashMap = (annotations: Annotation[]): Record<string, Array<number>> => {
+const getAnnotationsParentChildHashMap = (annotations: Annotation[]): Record<string, Array<Annotation>> => {
   return annotations.reduce(
     (acc, annotation) => {
       if (!isEmpty(annotation.refs)) {
-        const indexOfChild = findIndex(annotations, { id: annotation.id });
         annotation.refs.forEach((annotationId) => {
           if (acc[annotationId]) {
-            acc[annotationId].push(indexOfChild);
+            acc[annotationId].push(annotation);
           } else {
-            acc[annotationId] = [indexOfChild];
+            acc[annotationId] = [annotation];
           }
         });
 
@@ -109,64 +105,49 @@ const getAnnotationsParentChildIndexesHashMap = (annotations: Annotation[]): Rec
 
       return acc;
     },
-    {} as Record<string, Array<number>>,
+    {} as Record<string, Array<Annotation>>,
   );
+};
+
+const filterChildAnnotations = (annotation: Annotation) => {
+  return isEmpty(annotation.refs);
 };
 
 // HINT: you probably need to pass extra argument(s) to this function to make it performant.
 const convertAnnotation = (
   annotation: Annotation,
-  annotations: Annotation[],
   convertedEntitiesHashMap: Record<string, ConvertedEntity>,
-  parentChildIndexesHashMap: Record<string, Array<number>>,
-  convertedAnnotationsHashMap: Record<string, ConvertedAnnotation>,
+  parentChildHashMap: Record<string, Array<Annotation>>,
 ): ConvertedAnnotation => {
-  const { id, entityId, refs, value, indices } = annotation;
-  const isParent = isEmpty(refs);
-  let index;
-  if (convertedAnnotationsHashMap.hasOwnProperty(id)) {
-    return convertedAnnotationsHashMap[id];
-  }
+  const { id, entityId, value, indices } = annotation;
 
   let children: ConvertedAnnotation[] = [];
 
-  if (parentChildIndexesHashMap[id]) {
-    children = parentChildIndexesHashMap[id]
-      .map((indexOfAnnotation) =>
-        convertAnnotation(
-          annotations[indexOfAnnotation],
-          annotations,
-          convertedEntitiesHashMap,
-          parentChildIndexesHashMap,
-          convertedAnnotationsHashMap,
-        ),
-      )
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      .map(({ isParent, ...rest }) => rest)
+  if (parentChildHashMap[id]) {
+    children = parentChildHashMap[id]
+      .map((annotation) => convertAnnotation(annotation, convertedEntitiesHashMap, parentChildHashMap))
       .sort(sortAnnotations);
   }
 
-  if (indices && !isEmpty(indices)) {
-    index = indices[0].start;
-  } else {
-    index = children.reduce((acc, { index: childIndex }) => Math.min(acc, childIndex), Infinity);
-  }
-
   const entity = convertedEntitiesHashMap[entityId];
-  const convertedAnnotation = {
+
+  return {
     id,
     entity: {
       id: entity.id,
       name: entity.name,
     },
     value,
-    index,
+    index: getIndex(indices, children),
     children,
-    isParent: isParent,
   };
-  convertedAnnotationsHashMap[id] = convertedAnnotation;
+};
 
-  return convertedAnnotation;
+const getIndex = (indices: Annotation['indices'], children: ConvertedAnnotation[]) => {
+  if (indices && !isEmpty(indices)) {
+    return indices[0].start;
+  }
+  return children.reduce((acc, { index: childIndex }) => Math.min(acc, childIndex), Infinity);
 };
 
 const sortEntities = (entityA: ConvertedEntity, entityB: ConvertedEntity) => {
@@ -199,7 +180,6 @@ export const validateOutput = (output: Output) => {
     children: Yup.array()
       .of(Yup.lazy(() => annotationScheme))
       .required(),
-    isParent: Yup.boolean(),
   });
 
   Yup.object({
